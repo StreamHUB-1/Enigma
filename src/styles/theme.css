@@ -1,0 +1,14 @@
+@theme {
+  --color-primary: #7A2828;
+  --color-secondary: #A73737;
+  --color-accent: #A73737;
+}
+
+@layer components {
+  .bg-theme-gradient {
+    background: linear-gradient(135deg, #7A2828 0%, #A73737 100%);
+  }
+  .text-theme-primary { color: #7A2828; }
+  .text-theme-secondary { color: #A73737; }
+  .border-theme-primary { border-color: #7A2828; }
+}
