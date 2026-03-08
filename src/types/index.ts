@@ -12,6 +12,13 @@ export interface Employee {
   joinDate: string;
   password: string;
   role: Role;
+  
+  // --- Tambahan Data Baru Administrasi & Benefit ---
+  anggotaKokas?: string;
+  noKokas?: string;
+  workDuration?: string;
+  bpjsKesehatan?: string;
+  bpjsKetenagakerjaan?: string;
 }
 
 export interface Attendance {

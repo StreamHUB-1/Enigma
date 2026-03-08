@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Plus, Edit, Trash2, X, MapPin, Navigation } from 'lucide-react';
+import { ArrowLeft, Plus, Edit, Trash2, X, Eye, EyeOff, MapPin, Navigation } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Employee, Role } from '../types';
 import { BRANCHES } from '../constants';
+import { supabase } from '../lib/supabase';
 import { MapContainer, TileLayer, Marker, Circle, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 
@@ -15,19 +16,23 @@ L.Icon.Default.mergeOptions({
 });
 
 interface ControlPanelProps {
-  employees: Employee[];
-  setEmployees: React.Dispatch<React.SetStateAction<Employee[]>>;
   onBack: () => void;
 }
 
-export default function ControlPanel({ employees, setEmployees, onBack }: ControlPanelProps) {
+export default function ControlPanel({ onBack }: ControlPanelProps) {
+  // State Data Supabase
+  const [employeesData, setEmployeesData] = useState<Employee[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // State Modal & UI
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmp, setEditingEmp] = useState<Employee | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterBranch, setFilterBranch] = useState('');
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  const [showPassword, setShowPassword] = useState(false); 
   
-  // --- STATE PENGATURAN LOKASI (PER CABANG) ---
+  // State Pengaturan Lokasi
   const [isLocModalOpen, setIsLocModalOpen] = useState(false);
   const [locBranch, setLocBranch] = useState<string>(BRANCHES[0] || 'Cibubur');
   const [latInput, setLatInput] = useState('-6.3761176');
@@ -35,11 +40,133 @@ export default function ControlPanel({ employees, setEmployees, onBack }: Contro
   const [radiusInput, setRadiusInput] = useState('200');
   const [mapCenter, setMapCenter] = useState<[number, number]>([-6.3761176, 106.897086]);
 
-  const [formData, setFormData] = useState<Partial<Employee>>({
-    id: '', name: '', phone: '', address: '', branch: '', grade: '', field: '', position: '', password: '', role: 'EMPLOYEE'
+  // Menggunakan type 'any' sementara agar tidak error Typescript jika tipe Employee di types.ts belum diperbarui oleh user.
+  const [formData, setFormData] = useState<any>({
+    id: '', name: '', phone: '', address: '', branch: '', grade: '', field: '', position: '', password: '', role: 'EMPLOYEE',
+    anggotaKokas: '', noKokas: '', workDuration: '', bpjsKesehatan: '', bpjsKetenagakerjaan: ''
   });
 
-  // Load data lokasi berdasarkan Cabang yang dipilih
+  // 1. Tarik Data Karyawan dari Supabase
+  const fetchEmployees = async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('employees')
+      .select('*')
+      .order('id', { ascending: true }); 
+
+    if (error) {
+      console.error('Error fetching employees:', error);
+      alert('Gagal mengambil data dari database!');
+    } else {
+      setEmployeesData(data as Employee[]);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchEmployees();
+  }, []);
+
+  // Filter Search & Branch
+  const filteredEmployees = employeesData.filter(emp => {
+    const query = searchQuery.toLowerCase();
+    const matchesSearch = emp.name.toLowerCase().includes(query) || 
+                          emp.id.toLowerCase().includes(query) ||
+                          emp.branch.toLowerCase().includes(query);
+    const matchesBranch = filterBranch === '' || emp.branch === filterBranch;
+    return matchesSearch && matchesBranch;
+  });
+
+  // Modal Handlers
+  const openAdd = () => {
+    setEditingEmp(null);
+    setFormData({ 
+      id: '', name: '', phone: '', address: '', branch: '', grade: '', field: '', position: '', password: '', role: 'EMPLOYEE',
+      anggotaKokas: '', noKokas: '', workDuration: '', bpjsKesehatan: '', bpjsKetenagakerjaan: ''
+    });
+    setShowPassword(false);
+    setIsModalOpen(true);
+  };
+
+  const openEdit = (emp: any) => {
+    setEditingEmp(emp);
+    // Memasukkan data existing, jika data tambahan belum ada di DB akan diisi string kosong
+    setFormData({
+      ...emp,
+      anggotaKokas: emp.anggotaKokas || '',
+      noKokas: emp.noKokas || '',
+      workDuration: emp.workDuration || '',
+      bpjsKesehatan: emp.bpjsKesehatan || '',
+      bpjsKetenagakerjaan: emp.bpjsKetenagakerjaan || ''
+    });
+    setShowPassword(false);
+    setIsModalOpen(true);
+  };
+
+  // 2. Simpan Data ke Supabase (Insert / Update)
+  const handleSave = async () => {
+    if (!formData.id || !formData.name || !formData.password || !formData.branch) {
+      return alert('ID Login, Nama, Password, dan Cabang wajib diisi!');
+    }
+
+    if (editingEmp) {
+      // CEK DUPLIKASI ID JIKA ADMIN MENGUBAH ID LOGIN KARYAWAN
+      if (editingEmp.id !== formData.id) {
+        const isDuplicate = employeesData.some(e => e.id === formData.id);
+        if (isDuplicate) return alert('ID Login baru sudah digunakan! Silakan pilih ID lain.');
+      }
+
+      // UPDATE DATA: Menggunakan ID asli (editingEmp.id) sebagai kunci pencarian di database
+      const { error } = await supabase
+        .from('employees')
+        .update(formData)
+        .eq('id', editingEmp.id);
+
+      if (error) {
+        alert('Gagal update karyawan: ' + error.message);
+      } else {
+        alert('✅ Data karyawan berhasil diupdate!');
+        setIsModalOpen(false);
+        fetchEmployees(); 
+      }
+    } else {
+      // CEK ID DUPLIKAT LALU INSERT DATA BARU
+      const isDuplicate = employeesData.some(e => e.id === formData.id);
+      if (isDuplicate) return alert('ID Karyawan sudah terdaftar! Gunakan ID lain.');
+
+      const { error } = await supabase
+        .from('employees')
+        .insert([formData]);
+
+      if (error) {
+        alert('Gagal menambah karyawan: ' + error.message);
+      } else {
+        alert('✅ Karyawan baru berhasil ditambahkan!');
+        setIsModalOpen(false);
+        fetchEmployees(); 
+      }
+    }
+  };
+
+  // 3. Hapus Data dari Supabase
+  const handleDelete = async (id: string) => {
+    if (id === 'admin') return alert('Akun Admin utama tidak boleh dihapus!');
+    
+    if (confirm('Yakin ingin menghapus karyawan ini dari database?')) {
+      const { error } = await supabase
+        .from('employees')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        alert('Gagal menghapus: ' + error.message);
+      } else {
+        fetchEmployees(); 
+      }
+    }
+  };
+
+  // --- LOGIKA LOKASI (GPS) ---
   useEffect(() => {
     const savedLat = localStorage.getItem(`enigma_office_lat_${locBranch}`);
     const savedLng = localStorage.getItem(`enigma_office_lng_${locBranch}`);
@@ -50,12 +177,10 @@ export default function ControlPanel({ employees, setEmployees, onBack }: Contro
       setLngInput(savedLng);
       setMapCenter([parseFloat(savedLat), parseFloat(savedLng)]);
     } else {
-      // Default jika belum diset
       setLatInput('-6.3761176');
       setLngInput('106.897086');
       setMapCenter([-6.3761176, 106.897086]);
     }
-    
     setRadiusInput(savedRad || '200');
   }, [locBranch, isLocModalOpen]);
 
@@ -82,7 +207,6 @@ export default function ControlPanel({ employees, setEmployees, onBack }: Contro
     }
   };
 
-  // Komponen Marker Interaktif
   const LocationMarker = () => {
     useMapEvents({
       click(e) {
@@ -94,98 +218,131 @@ export default function ControlPanel({ employees, setEmployees, onBack }: Contro
     return mapCenter ? (
       <>
         <Marker position={mapCenter}></Marker>
-        {/* Lingkaran Radius */}
-        <Circle 
-          center={mapCenter} 
-          radius={Number(radiusInput)} 
-          pathOptions={{ color: '#2563eb', fillColor: '#3b82f6', fillOpacity: 0.2 }} 
-        />
+        <Circle center={mapCenter} radius={Number(radiusInput)} pathOptions={{ color: '#e11d48', fillColor: '#f43f5e', fillOpacity: 0.2 }} />
       </>
     ) : null;
   };
 
-  const filteredEmployees = employees.filter(emp => {
-    const matchesSearch = emp.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                         emp.id.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesBranch = filterBranch === '' || emp.branch === filterBranch;
-    return matchesSearch && matchesBranch;
-  });
-
-  const openAdd = () => {
-    setEditingEmp(null);
-    setFormData({ id: '', name: '', phone: '', address: '', branch: '', grade: '', field: '', position: '', password: '', role: 'EMPLOYEE' });
-    setIsModalOpen(true);
-  };
-
-  const openEdit = (emp: Employee) => {
-    setEditingEmp(emp);
-    setFormData(emp);
-    setIsModalOpen(true);
-  };
-
-  const handleSave = () => {
-    if (editingEmp) {
-      setEmployees(prev => prev.map(e => e.id === editingEmp.id ? (formData as Employee) : e));
-    } else {
-      if (employees.some(e => e.id === formData.id)) return alert('ID Karyawan sudah ada!');
-      setEmployees(prev => [...prev, formData as Employee]);
-    }
-    setIsModalOpen(false);
-  };
-
-  const handleDelete = (id: string) => {
-    if (id === 'admin') return alert('Admin utama tidak bisa dihapus!');
-    if (confirm('Hapus karyawan ini?')) setEmployees(prev => prev.filter(e => e.id !== id));
-  };
-
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-6xl mx-auto pb-20">
+      
+      {/* HEADER & CONTROLS */}
       <div className="flex flex-col md:flex-row items-center justify-between mb-8 gap-6">
         <div className="flex items-center gap-4">
-          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg transition-colors"><ArrowLeft size={20} /></button>
-          <h2 className="text-xl font-bold">Control Panel</h2>
+          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
+            <ArrowLeft size={20} />
+          </button>
+          <h2 className="text-xl font-bold text-gray-800">Control Panel</h2>
         </div>
 
-        <div className="flex flex-col sm:flex-row items-center gap-4">
-          <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Cari Nama / ID..." className="px-4 py-3 rounded-2xl border border-slate-200 outline-none focus:border-primary w-full sm:w-64" />
-          
+        <div className="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto">
+          {/* SEARCH BAR ANIMASI */}
+          <div className="relative group w-full sm:w-80 z-20">
+            <div className="absolute w-32 rotate-6 h-10 bg-red-500 rounded-full blur-[12px] -left-2 top-1 opacity-40 group-hover:opacity-70 transition-opacity duration-300"></div>
+            <div className="absolute w-32 rotate-6 h-10 group-hover:w-44 transition-all duration-300 ease-out bg-slate-800 rounded-2xl blur-[12px] -right-2 bottom-1 opacity-40 group-hover:opacity-70"></div>
+            <div className="absolute w-32 h-14 group-hover:h-6 group-hover:blur-[25px] group-hover:w-56 transition-all ease-out duration-300 bg-red-600 rounded-full blur-[20px] -left-5 -top-1 opacity-30"></div>
+            <div className="absolute w-32 h-14 group-hover:h-6 group-hover:blur-[25px] group-hover:w-56 transition-all ease-out duration-300 bg-slate-700 rounded-full blur-[20px] -right-3 -bottom-2 opacity-30"></div>
+
+            <div className="relative w-full h-12 overflow-hidden rounded-2xl bg-white border border-gray-200 shadow-sm z-10 flex items-center">
+              <div className="absolute z-10 -translate-x-44 group-hover:translate-x-[30rem] ease-in transition-all duration-700 h-full w-44 bg-gradient-to-r from-transparent via-red-100 to-transparent opacity-50 -skew-x-12 pointer-events-none"></div>
+
+              <div className="absolute group-focus-within:-left-[5px] group-focus-within:-top-[20px] transition-all duration-300 ease-out w-32 h-32 bg-red-50 blur-[20px] -left-[100px] -top-[100px] z-0 pointer-events-none"></div>
+              <div className="absolute group-focus-within:-right-[5px] group-focus-within:-bottom-[20px] transition-all duration-300 ease-out w-32 h-32 bg-slate-50 blur-[20px] -right-[100px] -bottom-[100px] z-0 pointer-events-none"></div>
+
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2.5" stroke="currentColor" className="size-5 text-gray-400 absolute left-4 top-1/2 -translate-y-1/2 z-[20] pointer-events-none">
+                <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"></path>
+              </svg>
+
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Cari Nama / ID / Cabang..."
+                className="relative w-full h-full outline-none text-sm font-bold text-gray-800 bg-transparent placeholder:font-normal placeholder:text-gray-400 pl-12 pr-16 z-[30]"
+              />
+
+              <div 
+                className="absolute overflow-hidden top-[6px] right-2 bottom-[6px] rounded-xl bg-gray-50 border border-gray-100 p-[2px] z-[40] cursor-pointer group/filter transition-all hover:border-red-200 shadow-sm"
+                onClick={() => setShowFilterDropdown(!showFilterDropdown)}
+              >
+                <div className="absolute group-hover/filter:-left-8 transition-all duration-300 ease-out w-16 h-5 bg-red-200 rounded-full blur-[8px] -left-4 -top-3 pointer-events-none"></div>
+                <div className="absolute group-hover/filter:-left-8 transition-all duration-300 ease-out w-16 h-5 bg-red-200 rounded-full blur-[8px] -left-4 -bottom-3 pointer-events-none"></div>
+                <div className="bg-white relative rounded-lg px-2.5 h-full flex items-center justify-center transition-colors group-hover/filter:text-red-600 text-gray-500">
+                  <svg className="size-4" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 0 1-.659 1.591l-5.432 5.432a2.25 2.25 0 0 0-.659 1.591v2.927a2.25 2.25 0 0 1-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 0 0-.659-1.591L3.659 7.409A2.25 2.25 0 0 1 3 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0 1 12 3Z" strokeLinejoin="round" strokeLinecap="round"></path>
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            <AnimatePresence>
+              {showFilterDropdown && (
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute top-full right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-gray-100 z-[100] max-h-64 overflow-y-auto">
+                  <div className="p-2 space-y-1">
+                    <button onClick={() => { setFilterBranch(''); setShowFilterDropdown(false); }} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-bold transition-colors ${filterBranch === '' ? 'bg-red-50 text-red-600' : 'text-gray-600 hover:bg-gray-50'}`}>Semua Cabang</button>
+                    {BRANCHES.map(b => (
+                      <button key={b} onClick={() => { setFilterBranch(b); setShowFilterDropdown(false); }} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-bold transition-colors ${filterBranch === b ? 'bg-red-50 text-red-600' : 'text-gray-600 hover:bg-gray-50'}`}>{b}</button>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
           <div className="flex gap-3 w-full sm:w-auto">
-            <button onClick={() => setIsLocModalOpen(true)} className="bg-white border-2 border-slate-200 text-slate-600 px-4 py-3 rounded-2xl font-bold flex items-center gap-2 hover:border-red-600 hover:text-red-600 transition-all active:scale-95 shadow-sm">
-              <MapPin size={20} />
+            <button onClick={() => setIsLocModalOpen(true)} className="bg-white border-2 border-gray-200 text-gray-600 px-4 py-3 rounded-2xl font-bold flex items-center justify-center gap-2 hover:border-red-600 hover:text-red-600 transition-all active:scale-95 shadow-sm">
+              <MapPin size={18} />
             </button>
-            <button onClick={openAdd} className="flex-1 sm:flex-none bg-red-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg hover:bg-red-700 transition-all active:scale-95">
-              <Plus size={20} /> Tambah
+            <button onClick={openAdd} className="flex-1 sm:flex-none bg-red-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-red-600/20 hover:bg-red-700 transition-all active:scale-95">
+              <Plus size={18} /> Tambah
             </button>
           </div>
         </div>
       </div>
 
-      <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+      {/* TABLE DATA */}
+      <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-slate-50 border-b border-slate-100">
+            <thead className="bg-gray-50 border-b border-gray-100">
               <tr>
-                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">ID / Nama</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Jabatan / Cabang</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Role</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase text-right">Aksi</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">ID / Nama</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Jabatan / Cabang</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Role</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider text-right">Aksi</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filteredEmployees.length > 0 ? filteredEmployees.map(emp => (
-                <tr key={emp.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-6 py-4"><p className="font-bold text-slate-900">{emp.name}</p><p className="text-xs text-slate-500">{emp.id}</p></td>
-                  <td className="px-6 py-4"><p className="text-sm font-medium text-slate-700">{emp.position}</p><p className="text-xs text-red-600 font-bold uppercase">{emp.branch}</p></td>
-                  <td className="px-6 py-4"><span className={`px-2 py-1 rounded-md text-[10px] font-bold ${emp.role === 'ADMIN' ? 'bg-slate-800 text-white' : 'bg-red-50 text-red-600'}`}>{emp.role}</span></td>
+            <tbody className="divide-y divide-gray-50">
+              {loading ? (
+                <tr><td colSpan={4} className="px-6 py-12 text-center text-gray-400 font-bold">Memuat Data dari Database...</td></tr>
+              ) : filteredEmployees.length > 0 ? filteredEmployees.map(emp => (
+                <tr key={emp.id} className="hover:bg-red-50/30 transition-colors">
+                  <td className="px-6 py-4">
+                    <p className="font-bold text-gray-800">{emp.name}</p>
+                    <p className="text-[11px] font-medium text-gray-400">{emp.id}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <p className="text-sm font-bold text-gray-700">{emp.position === '-' ? 'Belum Diatur' : emp.position}</p>
+                    <p className="text-[10px] font-bold text-red-600 uppercase tracking-wide mt-0.5">{emp.branch}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold tracking-wide ${emp.role === 'ADMIN' ? 'bg-gray-800 text-white' : 'bg-blue-50 text-blue-600'}`}>
+                      {emp.role}
+                    </span>
+                  </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex justify-end gap-2">
-                      <button onClick={() => openEdit(emp)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"><Edit size={18} /></button>
-                      <button onClick={() => handleDelete(emp.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"><Trash2 size={18} /></button>
+                      <button onClick={() => openEdit(emp)} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all">
+                        <Edit size={16} />
+                      </button>
+                      <button onClick={() => handleDelete(emp.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all">
+                        <Trash2 size={16} />
+                      </button>
                     </div>
                   </td>
                 </tr>
               )) : (
-                <tr><td colSpan={4} className="px-6 py-12 text-center text-slate-400 font-medium">Tidak ada data karyawan yang ditemukan.</td></tr>
+                <tr><td colSpan={4} className="px-6 py-12 text-center text-gray-400 font-medium">Tidak ada data karyawan yang ditemukan.</td></tr>
               )}
             </tbody>
           </table>
@@ -193,34 +350,126 @@ export default function ControlPanel({ employees, setEmployees, onBack }: Contro
       </div>
 
       <AnimatePresence>
-        {/* MODAL KARYAWAN */}
+        {/* MODAL TAMBAH / EDIT KARYAWAN */}
         {isModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
-            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
-              <div className="p-6 border-b border-slate-100 flex justify-between items-center sticky top-0 bg-white z-10">
-                <h3 className="text-xl font-bold">{editingEmp ? 'Edit Karyawan' : 'Tambah Karyawan Baru'}</h3>
-                <button onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-slate-100 rounded-lg"><X size={20} /></button>
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white rounded-3xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl">
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center sticky top-0 bg-white z-10">
+                <h3 className="text-xl font-bold text-gray-800">{editingEmp ? 'Edit Profil Karyawan' : 'Tambah Karyawan Baru'}</h3>
+                <button onClick={() => setIsModalOpen(false)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"><X size={20} /></button>
               </div>
-              <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-4">
-                  <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">ID Login</label><input disabled={!!editingEmp} value={formData.id} onChange={(e) => setFormData({...formData, id: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500" /></div>
-                  <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Password</label><input type="password" value={formData.password} onChange={(e) => setFormData({...formData, password: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500" /></div>
-                  <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Nama Lengkap</label><input value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500" /></div>
-                  <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">No Telepon</label><input value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500" /></div>
+              
+              <div className="p-8 space-y-8">
+                
+                {/* SECTION 1: DATA AKUN & PERSONAL */}
+                <div>
+                  <h4 className="text-xs font-black text-red-600 uppercase tracking-widest border-b border-gray-100 pb-2 mb-4">1. Data Akun & Personal</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">ID Login</label>
+                      <input value={formData.id} onChange={(e) => setFormData({...formData, id: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Contoh: emp001" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Password</label>
+                      <div className="relative">
+                        <input 
+                          type={showPassword ? 'text' : 'password'} 
+                          value={formData.password} 
+                          onChange={(e) => setFormData({...formData, password: e.target.value})} 
+                          className="w-full p-3.5 pr-12 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" 
+                          placeholder="••••••••" 
+                        />
+                        <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700">
+                          {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Nama Lengkap</label>
+                      <input value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">No Telepon</label>
+                      <input value={formData.phone === '-' ? '' : formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="08..." />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Alamat Domisili</label>
+                      <textarea value={formData.address === '-' ? '' : formData.address} onChange={(e) => setFormData({...formData, address: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors h-20" placeholder="Alamat lengkap..." />
+                    </div>
+                  </div>
                 </div>
-                <div className="space-y-4">
-                  <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Cabang</label><select value={formData.branch} onChange={(e) => setFormData({...formData, branch: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500"><option value="">Pilih</option>{BRANCHES.map(b => <option key={b} value={b}>{b}</option>)}</select></div>
-                  <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Jabatan</label><input value={formData.position} onChange={(e) => setFormData({...formData, position: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500" /></div>
-                  <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Role</label><select value={formData.role} onChange={(e) => setFormData({...formData, role: e.target.value as Role})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500"><option value="EMPLOYEE">Karyawan</option><option value="ADMIN">Admin</option></select></div>
-                  <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Alamat</label><textarea value={formData.address} onChange={(e) => setFormData({...formData, address: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500" /></div>
+
+                {/* SECTION 2: DATA PEKERJAAN */}
+                <div>
+                  <h4 className="text-xs font-black text-red-600 uppercase tracking-widest border-b border-gray-100 pb-2 mb-4">2. Data Pekerjaan</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Cabang Penempatan</label>
+                      <select value={formData.branch} onChange={(e) => setFormData({...formData, branch: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-bold transition-colors">
+                        <option value="">Pilih Cabang</option>
+                        {BRANCHES.map(b => <option key={b} value={b}>{b}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Jabatan</label>
+                      <input value={formData.position === '-' ? '' : formData.position} onChange={(e) => setFormData({...formData, position: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Contoh: Mekanik" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Golongan</label>
+                      <input value={formData.grade === '-' ? '' : formData.grade} onChange={(e) => setFormData({...formData, grade: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Contoh: 3A" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Bidang / Departemen</label>
+                      <input value={formData.field === '-' ? '' : formData.field} onChange={(e) => setFormData({...formData, field: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Contoh: Service" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Lama Bekerja</label>
+                      <input value={formData.workDuration} onChange={(e) => setFormData({...formData, workDuration: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Contoh: 2 Tahun 3 Bulan" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Role Sistem</label>
+                      <select value={formData.role} onChange={(e) => setFormData({...formData, role: e.target.value as Role})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-bold transition-colors">
+                        <option value="EMPLOYEE">Karyawan (EMPLOYEE)</option>
+                        <option value="ADMIN">Administrator (ADMIN)</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
+
+                {/* SECTION 3: ADMINISTRASI & BENEFIT */}
+                <div>
+                  <h4 className="text-xs font-black text-red-600 uppercase tracking-widest border-b border-gray-100 pb-2 mb-4">3. Administrasi & Benefit</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Nomor Anggota Kokas</label>
+                      <input value={formData.anggotaKokas} onChange={(e) => setFormData({...formData, anggotaKokas: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Masukkan nomor anggota" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">No Kokas</label>
+                      <input value={formData.noKokas} onChange={(e) => setFormData({...formData, noKokas: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Masukkan no kokas" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">No. BPJS Kesehatan</label>
+                      <input value={formData.bpjsKesehatan} onChange={(e) => setFormData({...formData, bpjsKesehatan: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Masukkan nomor BPJS Kes" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">No. BPJS Ketenagakerjaan</label>
+                      <input value={formData.bpjsKetenagakerjaan} onChange={(e) => setFormData({...formData, bpjsKetenagakerjaan: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Masukkan nomor BPJS TK" />
+                    </div>
+                  </div>
+                </div>
+
               </div>
-              <div className="p-6 border-t flex gap-4"><button onClick={() => setIsModalOpen(false)} className="flex-1 py-3 bg-gray-100 rounded-xl font-bold">Batal</button><button onClick={handleSave} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold">Simpan</button></div>
+
+              <div className="p-6 border-t border-gray-100 flex gap-4 bg-gray-50/50 sticky bottom-0 z-10">
+                <button onClick={() => setIsModalOpen(false)} className="flex-1 py-4 bg-white border border-gray-200 text-gray-600 rounded-xl font-bold hover:bg-gray-50 transition-colors active:scale-95 shadow-sm">Batal</button>
+                <button onClick={handleSave} className="flex-1 py-4 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-lg shadow-red-600/30 transition-all active:scale-95">Simpan Data</button>
+              </div>
             </motion.div>
           </div>
         )}
 
-        {/* MODAL PENGATURAN LOKASI */}
+        {/* MODAL PENGATURAN LOKASI (Tetap Dipertahankan) */}
         {isLocModalOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl relative flex flex-col max-h-[90vh]">
@@ -236,60 +485,37 @@ export default function ControlPanel({ employees, setEmployees, onBack }: Contro
               </div>
 
               <div className="flex-1 overflow-y-auto p-5 space-y-5">
-                
-                {/* Dropdown Pemilihan Cabang */}
                 <div>
                   <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Pilih Cabang</label>
-                  <select 
-                    value={locBranch} 
-                    onChange={(e) => setLocBranch(e.target.value)} 
-                    className="w-full p-3 bg-gray-100 border border-gray-300 text-gray-800 rounded-xl text-sm font-bold outline-none focus:border-red-500"
-                  >
+                  <select value={locBranch} onChange={(e) => setLocBranch(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl text-sm font-bold outline-none focus:border-red-500">
                     {BRANCHES.map(b => <option key={b} value={b}>{b}</option>)}
                   </select>
                 </div>
-
-                {/* Peta */}
                 <div className="h-48 w-full rounded-xl overflow-hidden border border-gray-200 relative z-0">
                   <MapContainer center={mapCenter} zoom={15} style={{ height: '100%', width: '100%' }}>
                     <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                     <LocationMarker />
                   </MapContainer>
                 </div>
-
-                <button onClick={getCurrentLocation} className="w-full py-3 bg-slate-900 hover:bg-black text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2">
+                <button onClick={getCurrentLocation} className="w-full py-3 bg-slate-900 hover:bg-black text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all">
                   <Navigation size={16} /> AMBIL LOKASI SAAT INI (GPS)
                 </button>
-
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-500 mb-1">Latitude</label>
-                    <input type="text" value={latInput} onChange={(e) => setLatInput(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm" />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-500 mb-1">Longitude</label>
-                    <input type="text" value={lngInput} onChange={(e) => setLngInput(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm" />
-                  </div>
+                  <div><label className="block text-[10px] font-bold text-gray-500 mb-1">Latitude</label><input type="text" value={latInput} onChange={(e) => setLatInput(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm" /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-500 mb-1">Longitude</label><input type="text" value={lngInput} onChange={(e) => setLngInput(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm" /></div>
                 </div>
-
                 <div>
                   <div className="flex justify-between items-end mb-2">
                     <label className="block text-[10px] font-bold text-gray-500">Radius Toleransi (Meter)</label>
                     <span className="text-sm font-bold text-blue-600">{radiusInput} Meter</span>
                   </div>
-                  <input 
-                    type="range" min="10" max="500" step="10"
-                    value={radiusInput} onChange={(e) => setRadiusInput(e.target.value)}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                  />
-                  <div className="flex justify-between text-[10px] text-gray-400 mt-1">
-                    <span>10m (Sempit)</span><span>500m (Luas)</span>
-                  </div>
+                  <input type="range" min="10" max="500" step="10" value={radiusInput} onChange={(e) => setRadiusInput(e.target.value)} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600" />
+                  <div className="flex justify-between text-[10px] text-gray-400 mt-1"><span>10m</span><span>500m</span></div>
                 </div>
               </div>
 
               <div className="p-5 bg-white border-t border-gray-100">
-                <button onClick={saveLocationSettings} className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold shadow-lg shadow-red-600/30 flex items-center justify-center gap-2">
+                <button onClick={saveLocationSettings} className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold shadow-lg shadow-red-600/30 flex items-center justify-center gap-2 active:scale-95 transition-all">
                   SIMPAN PENGATURAN
                 </button>
               </div>
