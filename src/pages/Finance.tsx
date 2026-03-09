@@ -123,7 +123,8 @@ const SalarySlip = ({ isAdmin, user, period }: { isAdmin: boolean, user: Employe
 
         <div className="sg-emp-info">
           <div className="sg-grid-info">
-            <span>No</span><span>:</span><TextInput value={user?.id} className="editable" /> 
+            {/* Update: Ngambil data slipNo dari database */}
+            <span>No</span><span>:</span><TextInput value={user?.slipNo} className="editable" /> 
             <span>Nama</span><span>:</span><TextInput value={user?.name} className="editable" />
             <span>Cabang</span><span>:</span><TextInput value={user?.branch} className="editable" /> 
             <span>Golongan</span><span>:</span><TextInput value={user?.grade} className="editable" />
@@ -219,8 +220,9 @@ const SalarySlip = ({ isAdmin, user, period }: { isAdmin: boolean, user: Employe
             <div className="sg-bank-info">
               <strong>Di Transfer ke</strong>
               <div className="sg-grid-info" style={{ marginTop: '5px' }}>
-                <span>Bank</span><span>:</span><TextInput className="editable" /> 
-                <span>No Rek</span><span>:</span><TextInput className="editable" />
+                {/* Update: Ngambil data bankName & bankAccount dari database */}
+                <span>Bank</span><span>:</span><TextInput value={user?.bankName} className="editable" /> 
+                <span>No Rek</span><span>:</span><TextInput value={user?.bankAccount} className="editable" />
                 <span>Atas Nama</span><span>:</span><TextInput value={user?.name} className="editable" />
               </div>
             </div>
@@ -488,7 +490,7 @@ export default function FinancePage({ onBack, user }: FinancePageProps) {
         
         <div className="mt-4 flex justify-end">
           <button className="text-primary text-sm font-bold hover:underline flex items-center gap-1">
-            Liat Detail Penuh <ArrowRight size={16} />
+            Lihat Detail Penuh <ArrowRight size={16} />
           </button>
         </div>
       </div>
