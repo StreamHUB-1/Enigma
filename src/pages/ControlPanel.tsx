@@ -17,9 +17,11 @@ L.Icon.Default.mergeOptions({
 
 interface ControlPanelProps {
   onBack: () => void;
+  // SINKRONISASI: Nambahin fungsi pelatuk untuk refresh aplikasi utama
+  onDataChange?: () => void; 
 }
 
-export default function ControlPanel({ onBack }: ControlPanelProps) {
+export default function ControlPanel({ onBack, onDataChange }: ControlPanelProps) {
   // State Data Supabase
   const [employeesData, setEmployeesData] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
@@ -40,14 +42,12 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
   const [radiusInput, setRadiusInput] = useState('200');
   const [mapCenter, setMapCenter] = useState<[number, number]>([-6.3761176, 106.897086]);
 
-  // Menggunakan type 'any' sementara agar tidak error Typescript
   const [formData, setFormData] = useState<any>({
     id: '', name: '', phone: '', address: '', branch: '', grade: '', field: '', position: '', password: '', role: 'EMPLOYEE',
     anggotaKokas: '', noKokas: '', workDuration: '', bpjsKesehatan: '', bpjsKetenagakerjaan: '',
-    slipNo: '', bankName: 'PERMATA', bankAccount: '' // Tambahan Default State
+    slipNo: '', bankName: 'PERMATA', bankAccount: ''
   });
 
-  // 1. Tarik Data Karyawan dari Supabase
   const fetchEmployees = async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -68,7 +68,6 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
     fetchEmployees();
   }, []);
 
-  // Filter Search & Branch
   const filteredEmployees = employeesData.filter(emp => {
     const query = searchQuery.toLowerCase();
     const matchesSearch = emp.name.toLowerCase().includes(query) || 
@@ -78,13 +77,12 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
     return matchesSearch && matchesBranch;
   });
 
-  // Modal Handlers
   const openAdd = () => {
     setEditingEmp(null);
     setFormData({ 
       id: '', name: '', phone: '', address: '', branch: '', grade: '', field: '', position: '', password: '', role: 'EMPLOYEE',
       anggotaKokas: '', noKokas: '', workDuration: '', bpjsKesehatan: '', bpjsKetenagakerjaan: '',
-      slipNo: '', bankName: 'PERMATA', bankAccount: '' // Tambahan Default Field
+      slipNo: '', bankName: 'PERMATA', bankAccount: '' 
     });
     setShowPassword(false);
     setIsModalOpen(true);
@@ -92,7 +90,6 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
 
   const openEdit = (emp: any) => {
     setEditingEmp(emp);
-    // Memasukkan data existing, jika data tambahan belum ada di DB akan diisi string kosong/default
     setFormData({
       ...emp,
       anggotaKokas: emp.anggotaKokas || '',
@@ -108,7 +105,6 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
     setIsModalOpen(true);
   };
 
-  // 2. Simpan Data ke Supabase (Insert / Update)
   const handleSave = async () => {
     if (!formData.id || !formData.name || !formData.password || !formData.branch) {
       return alert('ID Login, Nama, Password, dan Cabang wajib diisi!');
@@ -131,6 +127,7 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
         alert('✅ Data karyawan berhasil diupdate!');
         setIsModalOpen(false);
         fetchEmployees(); 
+        if (onDataChange) onDataChange(); // <-- Sinkronisasi App.tsx
       }
     } else {
       const isDuplicate = employeesData.some(e => e.id === formData.id);
@@ -146,11 +143,11 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
         alert('✅ Karyawan baru berhasil ditambahkan!');
         setIsModalOpen(false);
         fetchEmployees(); 
+        if (onDataChange) onDataChange(); // <-- Sinkronisasi App.tsx
       }
     }
   };
 
-  // 3. Hapus Data dari Supabase
   const handleDelete = async (id: string) => {
     if (id === 'admin') return alert('Akun Admin utama tidak boleh dihapus!');
     
@@ -164,6 +161,7 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
         alert('Gagal menghapus: ' + error.message);
       } else {
         fetchEmployees(); 
+        if (onDataChange) onDataChange(); // <-- Sinkronisasi App.tsx
       }
     }
   };
@@ -228,7 +226,6 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-6xl mx-auto pb-20">
       
-      {/* HEADER & CONTROLS */}
       <div className="flex flex-col md:flex-row items-center justify-between mb-8 gap-6">
         <div className="flex items-center gap-4">
           <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
@@ -302,7 +299,6 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
         </div>
       </div>
 
-      {/* TABLE DATA */}
       <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -352,7 +348,6 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
       </div>
 
       <AnimatePresence>
-        {/* MODAL TAMBAH / EDIT KARYAWAN */}
         {isModalOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white rounded-3xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl">
@@ -363,7 +358,6 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
               
               <div className="p-8 space-y-8">
                 
-                {/* SECTION 1: DATA AKUN & PERSONAL */}
                 <div>
                   <h4 className="text-xs font-black text-red-600 uppercase tracking-widest border-b border-gray-100 pb-2 mb-4">1. Data Akun & Personal</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -401,7 +395,6 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
                   </div>
                 </div>
 
-                {/* SECTION 2: DATA PEKERJAAN */}
                 <div>
                   <h4 className="text-xs font-black text-red-600 uppercase tracking-widest border-b border-gray-100 pb-2 mb-4">2. Data Pekerjaan</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -438,7 +431,6 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
                   </div>
                 </div>
 
-                {/* SECTION 3: ADMINISTRASI & BENEFIT (Update ada disini) */}
                 <div>
                   <h4 className="text-xs font-black text-red-600 uppercase tracking-widest border-b border-gray-100 pb-2 mb-4">3. Administrasi & Benefit</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -483,7 +475,6 @@ export default function ControlPanel({ onBack }: ControlPanelProps) {
           </div>
         )}
 
-        {/* MODAL PENGATURAN LOKASI (Tetap Dipertahankan) */}
         {isLocModalOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl relative flex flex-col max-h-[90vh]">
