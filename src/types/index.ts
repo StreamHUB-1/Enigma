@@ -19,6 +19,11 @@ export interface Employee {
   workDuration?: string;
   bpjsKesehatan?: string;
   bpjsKetenagakerjaan?: string;
+
+  // --- Tambahan Data Bank & Slip Gaji ---
+  slipNo?: string;
+  bankName?: string;
+  bankAccount?: string;
 }
 
 export interface Attendance {
