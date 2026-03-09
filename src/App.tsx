@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Building2, LogOut } from 'lucide-react';
-import { AnimatePresence } from 'motion/react';
+import { Building2, LogOut, ChevronDown, Search, X, Users } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Employee } from './types'; 
 import { supabase } from './lib/supabase';
 
@@ -12,7 +12,6 @@ import FinancePage from './pages/Finance';
 import SubmissionPage from './pages/Submission';
 import ReportPage from './pages/Report';
 import ControlPanel from './pages/ControlPanel';
-// 1. TAMBAHIN IMPORT INI
 import SocialMediaPage from './pages/SocialMedia'; 
 
 /**
@@ -45,6 +44,10 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isLoggedIn, setIsLoggedIn] = useState(!!authUser);
+
+  // --- STATE BARU BUAT FITUR POPUP PENCARIAN KARYAWAN (KHUSUS ADMIN) ---
+  const [isSelectorOpen, setIsSelectorOpen] = useState(false);
+  const [selectorSearch, setSelectorSearch] = useState('');
 
   /**
    * Mengambil data seluruh karyawan dari Supabase.
@@ -129,6 +132,15 @@ export default function App() {
     if (authUser?.id === updatedEmp.id) setAuthUser(updatedEmp);
   };
 
+  // --- FILTER PENCARIAN POPUP KARYAWAN ---
+  const filteredSelectorEmployees = employees.filter(emp => {
+    if (emp.role !== 'EMPLOYEE') return false;
+    const query = selectorSearch.toLowerCase();
+    return emp.name.toLowerCase().includes(query) ||
+           emp.id.toLowerCase().includes(query) ||
+           emp.branch.toLowerCase().includes(query);
+  });
+
   if (!isLoggedIn) {
     return <LoginPage onLogin={handleLogin} />;
   }
@@ -159,20 +171,18 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
+            {/* TAMPILAN BARU UNTUK ADMIN SWITCHER */}
             {authUser?.role === 'ADMIN' && (
-              <div className="hidden md:block">
-                <select 
-                  className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-[12px] font-bold text-red-600 focus:ring-2 focus:ring-red-500 outline-none cursor-pointer max-w-[220px] truncate"
-                  onChange={(e) => handleSwitchEmployee(e.target.value)}
-                  value={currentUser?.id || 'admin'}
+              <div className="hidden md:block relative">
+                <button 
+                  onClick={() => setIsSelectorOpen(true)}
+                  className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-[12px] font-bold text-red-600 hover:bg-red-50 hover:border-red-200 transition-all shadow-sm max-w-[250px]"
                 >
-                  <option value="admin">Data Admin Utama</option>
-                  <optgroup label="Pilih Data Karyawan">
-                    {employees.filter(e => e.role === 'EMPLOYEE').map(e => (
-                      <option key={e.id} value={e.id}>{e.name} - {e.branch}</option>
-                    ))}
-                  </optgroup>
-                </select>
+                  <span className="truncate">
+                    {currentUser.id === authUser.id ? 'Data Admin Utama' : currentUser.name}
+                  </span>
+                  <ChevronDown size={14} className="text-red-400 flex-shrink-0" />
+                </button>
               </div>
             )}
 
@@ -192,6 +202,86 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* POPUP MODAL PENCARIAN KARYAWAN */}
+      <AnimatePresence>
+        {isSelectorOpen && (
+          <div className="fixed inset-0 z-[100] flex items-start justify-center pt-20 px-4 bg-black/40 backdrop-blur-sm" onClick={() => setIsSelectorOpen(false)}>
+            <motion.div 
+              initial={{ opacity: 0, y: -20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -20, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()} 
+              className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[80vh]"
+            >
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                  <Users size={20} className="text-red-600"/> Akses Data Karyawan
+                </h3>
+                <button onClick={() => setIsSelectorOpen(false)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-5 border-b border-slate-100">
+                <div className="relative flex items-center">
+                  <Search size={18} className="absolute left-4 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Cari Nama / ID / Cabang..."
+                    value={selectorSearch}
+                    onChange={(e) => setSelectorSearch(e.target.value)}
+                    className="w-full bg-slate-100 border-none rounded-2xl py-3.5 pl-12 pr-4 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-red-500/50 transition-all placeholder:font-normal"
+                    autoFocus
+                  />
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-3">
+                <button
+                  onClick={() => {
+                    handleSwitchEmployee('admin');
+                    setIsSelectorOpen(false);
+                    setSelectorSearch('');
+                  }}
+                  className={`w-full text-left px-5 py-4 rounded-2xl mb-2 flex flex-col transition-all ${currentUser.id === authUser?.id ? 'bg-red-50 border border-red-100 shadow-sm' : 'hover:bg-slate-50 border border-transparent'}`}
+                >
+                  <span className={`text-sm font-black ${currentUser.id === authUser?.id ? 'text-red-600' : 'text-slate-800'}`}>Data Admin Utama</span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Kembali ke profil admin</span>
+                </button>
+
+                <div className="px-5 py-3 mt-2">
+                  <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Daftar Karyawan</span>
+                </div>
+
+                {filteredSelectorEmployees.length > 0 ? filteredSelectorEmployees.map(emp => (
+                  <button
+                    key={emp.id}
+                    onClick={() => {
+                      handleSwitchEmployee(emp.id);
+                      setIsSelectorOpen(false);
+                      setSelectorSearch('');
+                    }}
+                    className={`w-full text-left px-5 py-4 rounded-2xl mb-1 flex items-center justify-between transition-all ${currentUser.id === emp.id ? 'bg-red-50 border border-red-100 shadow-sm' : 'hover:bg-slate-50 border border-transparent'}`}
+                  >
+                    <div>
+                      <span className={`block text-sm font-bold ${currentUser.id === emp.id ? 'text-red-600' : 'text-slate-800'}`}>{emp.name}</span>
+                      <span className="block text-[11px] font-medium text-slate-400 mt-1">{emp.id} • <span className="font-bold text-slate-500">{emp.branch}</span></span>
+                    </div>
+                    {currentUser.id === emp.id && (
+                      <div className="w-2.5 h-2.5 rounded-full bg-red-600 shadow-[0_0_8px_rgba(220,38,38,0.6)]"></div>
+                    )}
+                  </button>
+                )) : (
+                  <div className="py-12 text-center text-slate-400 text-sm font-medium">
+                    Data karyawan tidak ditemukan.
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <main className="max-w-7xl mx-auto px-4 py-6">
         <AnimatePresence mode="wait">
@@ -242,7 +332,7 @@ export default function App() {
             />
           )}
           
-          {/* 2. TAMBAHIN ROUTING SOCIAL MEDIA DI SINI */}
+          {/* TAMPILAN HALAMAN SOCIAL MEDIA */}
           {activeTab === 'social' && (
             <SocialMediaPage 
               key="social" 
