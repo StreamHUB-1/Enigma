@@ -1,522 +1,542 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Wallet, CreditCard, Calendar, ArrowLeft, ChevronDown, ArrowRight } from 'lucide-react';
-import { motion } from 'framer-motion'; 
-import { Employee } from '../types';
+import React, { useState, useEffect } from 'react';
+import { ArrowLeft, Plus, Edit, Trash2, X, Eye, EyeOff, MapPin, Navigation } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Employee, Role } from '../types';
+import { BRANCHES } from '../constants';
+import { supabase } from '../lib/supabase';
+import { MapContainer, TileLayer, Marker, Circle, useMapEvents } from 'react-leaflet';
+import L from 'leaflet';
 
-// --- Komponen Input Uang Terkontrol (Bisa Ngitung & Format Otomatis) ---
-const ControlledCurrencyInput = ({ value, onChange, className = "", style = {}, isDeduction = false, readOnly = false }: any) => {
-  const [isFocused, setIsFocused] = useState(false);
+// Fix icon leaflet di React
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (readOnly) return;
-    const numericValue = e.target.value.replace(/\D/g, ''); // Cuma ambil angka
-    onChange(numericValue ? parseInt(numericValue, 10) : 0);
-  };
-
-  // Logika tampilan angka: Format titik ribuan & nambahin minus buat potongan
-  let displayValue = value === 0 ? (isFocused ? "" : "-") : value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  if (isDeduction && value > 0 && !isFocused && displayValue !== "-") {
-    displayValue = "-" + displayValue;
-  }
-
-  return (
-    <input
-      type="text"
-      className={className}
-      style={style}
-      value={displayValue}
-      onChange={handleChange}
-      onFocus={() => setIsFocused(true)}
-      onBlur={() => setIsFocused(false)}
-      readOnly={readOnly}
-    />
-  );
-};
-
-// --- Komponen Input Teks Terkontrol (Bisa Auto-Fill Data) ---
-const TextInput = ({ value: externalValue, defaultValue = "-", className = "", style = {}, isTextArea = false, rows = 3, readOnly = false }: any) => {
-  const [localValue, setLocalValue] = useState(externalValue || defaultValue);
-
-  // Sync dengan data dari database jika berubah
-  useEffect(() => {
-    if (externalValue !== undefined) {
-      setLocalValue(externalValue || "-");
-    }
-  }, [externalValue]);
-
-  const handleChange = (e: any) => {
-    if (readOnly) return;
-    setLocalValue(e.target.value);
-  };
-
-  const handleFocus = () => {
-    if (localValue === "-" && !readOnly) setLocalValue("");
-  };
-
-  const handleBlur = () => {
-    if (localValue === "" && !readOnly) setLocalValue("-");
-  };
-
-  if (isTextArea) {
-    return (
-      <textarea
-        className={className}
-        style={style}
-        value={localValue}
-        onChange={handleChange}
-        onFocus={handleFocus}
-        onBlur={handleBlur}
-        rows={rows}
-        readOnly={readOnly}
-      />
-    );
-  }
-
-  return (
-    <input
-      type="text"
-      className={className}
-      style={style}
-      value={localValue}
-      onChange={handleChange}
-      onFocus={handleFocus}
-      onBlur={handleBlur}
-      readOnly={readOnly}
-    />
-  );
-};
-
-// --- Sub-Komponen SLIP GAJI ---
-const SalarySlip = ({ isAdmin, user, period }: { isAdmin: boolean, user: Employee | null, period: string }) => {
-  // State Penerimaan
-  const [incomes, setIncomes] = useState({
-    gajiPokok: 0, tunjMakan: 0, tunjTransport: 0, tunjKinerja: 0, tunjBeras: 0,
-    insentifRematching: 0, insentifSalon: 0, insentifAC: 0, insentifHCS: 0, insentifCatalytic: 0, backup: 0, tunjLembur: 0
-  });
-
-  // State Potongan
-  const [deductions, setDeductions] = useState({
-    potAbsensi: 0, potKeterlambatan: 0, potBpjsKes: 0, potBpjsTk: 0, potAccident: 0, pinjUangKokas: 0, simPokok: 0, simWajib: 0, simSukarela: 0
-  });
-
-  // Rumus Otomatis
-  const totalPenerimaan = Object.values(incomes).reduce((a, b) => a + b, 0);
-  const totalPotongan = Object.values(deductions).reduce((a, b) => a + b, 0);
-  const takeHomePay = totalPenerimaan - totalPotongan;
-
-  const handleIncome = (field: string, val: number) => setIncomes(prev => ({ ...prev, [field]: val }));
-  const handleDeduction = (field: string, val: number) => setDeductions(prev => ({ ...prev, [field]: val }));
-
-  return (
-    <div className="sg-wrapper" style={{ position: 'relative' }}>
-      {isAdmin && <input type="checkbox" id="sg-editToggle" style={{ display: 'none' }} />}
-
-      <div className="sg-container">
-        <div className="sg-header">
-          <div className="sg-company">
-            <strong>CV. ENIGMA/PEKA GROUP</strong><br />
-            Jl. Griya Mulatama Blok A5 No 2 Pondok Cabe Ilir<br />
-            Pamulang Tangerang Selatan 15418
-          </div>
-          <div className="sg-title">SLIP GAJI</div>
-        </div>
-
-        <div className="sg-emp-info">
-          <div className="sg-grid-info">
-            {/* Update: Ngambil data slipNo dari database */}
-            <span>No</span><span>:</span><TextInput value={user?.slipNo} className="editable" /> 
-            <span>Nama</span><span>:</span><TextInput value={user?.name} className="editable" />
-            <span>Cabang</span><span>:</span><TextInput value={user?.branch} className="editable" /> 
-            <span>Golongan</span><span>:</span><TextInput value={user?.grade} className="editable" />
-          </div>
-          <div className="sg-grid-info">
-            <span>Bidang</span><span>:</span><TextInput value={user?.field} className="editable" /> 
-            <span>Jabatan</span><span>:</span><TextInput value={user?.position} className="editable" />
-            <span>Periode</span><span>:</span><TextInput value={period} className="editable" /> 
-            <span></span><span></span><span></span>
-          </div>
-        </div>
-
-        <div className="sg-table-header">
-          <div className="sg-col-left">PENERIMAAN</div>
-          <div className="sg-col-right">POTONGAN</div>
-        </div>
-
-        <div className="sg-table-body">
-          <div className="sg-body-left">
-            <div className="sg-list">
-              <span>Gaji Pokok</span><span>:</span><ControlledCurrencyInput value={incomes.gajiPokok} onChange={(v:number) => handleIncome('gajiPokok', v)} className="editable sg-right-align" />
-              <span>Tunj Makan</span><span>:</span><ControlledCurrencyInput value={incomes.tunjMakan} onChange={(v:number) => handleIncome('tunjMakan', v)} className="editable sg-right-align" />
-              <span>Tunj Transport</span><span>:</span><ControlledCurrencyInput value={incomes.tunjTransport} onChange={(v:number) => handleIncome('tunjTransport', v)} className="editable sg-right-align" />
-              <span>Tunjangan Kinerja</span><span>:</span><ControlledCurrencyInput value={incomes.tunjKinerja} onChange={(v:number) => handleIncome('tunjKinerja', v)} className="editable sg-right-align" />
-              <span>Tunj Beras</span><span>:</span><ControlledCurrencyInput value={incomes.tunjBeras} onChange={(v:number) => handleIncome('tunjBeras', v)} className="editable sg-right-align" />
-              <span>Insentif Rematching</span><span>:</span><ControlledCurrencyInput value={incomes.insentifRematching} onChange={(v:number) => handleIncome('insentifRematching', v)} className="editable sg-right-align" />
-              <span>Insentif Salon</span><span>:</span><ControlledCurrencyInput value={incomes.insentifSalon} onChange={(v:number) => handleIncome('insentifSalon', v)} className="editable sg-right-align" />
-              <span>Insentif AC</span><span>:</span><ControlledCurrencyInput value={incomes.insentifAC} onChange={(v:number) => handleIncome('insentifAC', v)} className="editable sg-right-align" />
-              <span>Insentif HCS</span><span>:</span><ControlledCurrencyInput value={incomes.insentifHCS} onChange={(v:number) => handleIncome('insentifHCS', v)} className="editable sg-right-align" />
-              <span>Insentif Catalytic</span><span>:</span><ControlledCurrencyInput value={incomes.insentifCatalytic} onChange={(v:number) => handleIncome('insentifCatalytic', v)} className="editable sg-right-align" />
-              <span>Backup</span><span>:</span><ControlledCurrencyInput value={incomes.backup} onChange={(v:number) => handleIncome('backup', v)} className="editable sg-right-align" />
-              <span>Tunj Lembur/Piket</span><span>:</span><ControlledCurrencyInput value={incomes.tunjLembur} onChange={(v:number) => handleIncome('tunjLembur', v)} className="editable sg-right-align" />
-            </div>
-          </div>
-          <div className="sg-body-right">
-            <div className="sg-list">
-              <span>Pot. Absensi</span><span>:</span><ControlledCurrencyInput value={deductions.potAbsensi} onChange={(v:number) => handleDeduction('potAbsensi', v)} isDeduction={true} className="editable sg-right-align text-red-600" />
-              <span>Pot. Keterlambatan</span><span>:</span><ControlledCurrencyInput value={deductions.potKeterlambatan} onChange={(v:number) => handleDeduction('potKeterlambatan', v)} isDeduction={true} className="editable sg-right-align text-red-600" />
-              <span>Pot. BPJS Kesehatan</span><span>:</span><ControlledCurrencyInput value={deductions.potBpjsKes} onChange={(v:number) => handleDeduction('potBpjsKes', v)} isDeduction={true} className="editable sg-right-align text-red-600" />
-              <span>Pot. BPJS Ketenagakerjaan</span><span>:</span><ControlledCurrencyInput value={deductions.potBpjsTk} onChange={(v:number) => handleDeduction('potBpjsTk', v)} isDeduction={true} className="editable sg-right-align text-red-600" />
-              <span>Pot. Accident</span><span>:</span><ControlledCurrencyInput value={deductions.potAccident} onChange={(v:number) => handleDeduction('potAccident', v)} isDeduction={true} className="editable sg-right-align text-red-600" />
-              <span>Pinj. Uang Kokas</span><span>:</span><ControlledCurrencyInput value={deductions.pinjUangKokas} onChange={(v:number) => handleDeduction('pinjUangKokas', v)} isDeduction={true} className="editable sg-right-align text-red-600" />
-              <span>Sim. Pokok kokas</span><span>:</span><ControlledCurrencyInput value={deductions.simPokok} onChange={(v:number) => handleDeduction('simPokok', v)} isDeduction={true} className="editable sg-right-align text-red-600" />
-              <span>Sim. Wajib kokas</span><span>:</span><ControlledCurrencyInput value={deductions.simWajib} onChange={(v:number) => handleDeduction('simWajib', v)} isDeduction={true} className="editable sg-right-align text-red-600" />
-              <span>Sim. Sukarela kokas</span><span>:</span><ControlledCurrencyInput value={deductions.simSukarela} onChange={(v:number) => handleDeduction('simSukarela', v)} isDeduction={true} className="editable sg-right-align text-red-600" />
-            </div>
-          </div>
-        </div>
-
-        <div className="sg-total-row">
-          <div className="sg-total-left">
-            <strong>Total Penerimaan</strong>
-            <div className="sg-value-group">
-              <strong>Rp</strong>
-              <ControlledCurrencyInput value={totalPenerimaan} readOnly={true} className="editable sg-right-align fw-bold text-emerald-600 bg-emerald-50/50" />
-            </div>
-          </div>
-          <div className="sg-total-right">
-            <strong>Total Potongan</strong>
-            <div className="sg-value-group">
-              <strong>Rp</strong>
-              <ControlledCurrencyInput value={totalPotongan} isDeduction={true} readOnly={true} className="editable sg-right-align fw-bold text-red-600 bg-red-50/50" />
-            </div>
-          </div>
-        </div>
-
-        <div className="sg-footer">
-          <div className="sg-thp-row">
-            <div className="sg-thp-box">
-              <strong>TAKE HOME PAY</strong>
-              <div className="sg-value-group">
-                <strong>Rp</strong>
-                <ControlledCurrencyInput value={takeHomePay} readOnly={true} className="editable sg-right-align fw-bold text-blue-700 bg-blue-50/50 text-lg" />
-              </div>
-            </div>
-            <div className="sg-accident-box">
-              <span>Sisa Accident</span><span>:</span>
-              <div className="sg-value-group">
-                <span>Rp</span>
-                <ControlledCurrencyInput value={0} onChange={()=>{}} className="editable sg-right-align" />
-              </div>
-            </div>
-          </div>
-
-          <div className="sg-bpjs-info">
-            <div className="sg-grid-info">
-              <span>No. BPJS Kesehatan</span><span>:</span><TextInput value={user?.bpjsKesehatan} className="editable" />
-              <span>No. BPJS Ketenagakerjaan</span><span>:</span><TextInput value={user?.bpjsKetenagakerjaan} className="editable" />
-            </div>
-          </div>
-
-          <div className="sg-signatures">
-            <div className="sg-bank-info">
-              <strong>Di Transfer ke</strong>
-              <div className="sg-grid-info" style={{ marginTop: '5px' }}>
-                {/* Update: Ngambil data bankName & bankAccount dari database */}
-                <span>Bank</span><span>:</span><TextInput value={user?.bankName} className="editable" /> 
-                <span>No Rek</span><span>:</span><TextInput value={user?.bankAccount} className="editable" />
-                <span>Atas Nama</span><span>:</span><TextInput value={user?.name} className="editable" />
-              </div>
-            </div>
-            <div className="sg-sign-box">
-              <div className="sg-sign-title">CV ENIGMA</div>
-              <div className="sg-sign-name">Human Capital</div>
-            </div>
-            <div className="sg-sign-box">
-              <div className="sg-sign-title">Penerima</div>
-              <TextInput value={user?.name} className="editable sg-sign-name fw-bold" style={{ width: '100%', textAlign: 'center' }} />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {isAdmin && (
-        <label htmlFor="sg-editToggle" className="sg-edit-button">
-          <svg className="sg-edit-svgIcon" viewBox="0 0 512 512">
-            <path d="M410.3 231l11.3-11.3-33.9-33.9-62.1-62.1L291.7 89.8l-11.3 11.3-22.6 22.6L58.6 322.9c-10.4 10.4-18 23.3-22.2 37.4L1 480.7c-2.5 8.4-.2 17.5 6.1 23.7s15.3 8.5 23.7 6.1l120.3-35.4c14.1-4.2 27-11.8 37.4-22.2L387.7 253.7 410.3 231zM160 399.4l-9.1 22.7c-4 3.1-8.5 5.4-13.3 6.9L59.4 452l23-78.1c1.4-4.9 3.8-9.4 6.9-13.3l22.7-9.1v32c0 8.8 7.2 16 16 16h32zM362.7 18.7L348.3 33.2 325.7 55.8 314.3 67.1l33.9 33.9 62.1 62.1 33.9 33.9 11.3-11.3 22.6-22.6 14.5-14.5c25-25 25-65.5 0-90.5L453.3 18.7c-25-25-65.5-25-90.5 0zm-47.4 168l-144 144c-6.2 6.2-16.4 6.2-22.6 0s-6.2-16.4 0-22.6l144-144c6.2-6.2 16.4-6.2 22.6 0s6.2 16.4 0 22.6z"></path>
-          </svg>
-        </label>
-      )}
-    </div>
-  );
-};
-
-// --- Sub-Komponen KOKAS ---
-const KokasBalance = ({ isAdmin, user, period }: { isAdmin: boolean, user: Employee | null, period: string }) => {
-  const [simpanan, setSimpanan] = useState({ pokok: 0, wajib: 0, sukarela: 0 });
-  const [pinjaman, setPinjaman] = useState(0);
-  const [angsuran, setAngsuran] = useState({ a1: 0, a2: 0, a3: 0, a4: 0, a5: 0, a6: 0 });
-
-  // Rumus Otomatis
-  const totalSimpanan = Object.values(simpanan).reduce((a, b) => a + b, 0);
-  const totalAngsuran = Object.values(angsuran).reduce((a, b) => a + b, 0);
-  const sisaPinjaman = pinjaman - totalAngsuran;
-
-  const handleSimpanan = (f: string, v: number) => setSimpanan(p => ({ ...p, [f]: v }));
-  const handleAngsuran = (f: string, v: number) => setAngsuran(p => ({ ...p, [f]: v }));
-
-  return (
-    <div className="document-wrapper">
-      {isAdmin && <input type="checkbox" id="kokas-editToggle" style={{ display: 'none' }} />}
-
-      <div className="kokas-container">
-        <div className="header-title">Saldo Simpanan dan Pinjaman Anggota Kokas</div>
-
-        <div className="info-grid">
-          <div>Periode</div><div className="colon">:</div><div><TextInput value={period} className="editable-input mw-200" /></div>
-          <div>No</div><div className="colon">:</div><div><TextInput value={user?.noKokas} className="editable-input mw-200" /></div>
-          <div>Nama</div><div className="colon">:</div><div><TextInput value={user?.name} className="editable-input mw-350" /></div>
-          <div>Nomor Anggota</div><div className="colon">:</div><div><TextInput value={user?.anggotaKokas} className="editable-input mw-200" /></div>
-          <div>Cabang</div><div className="colon">:</div><div><TextInput value={user?.branch} className="editable-input mw-350" /></div>
-        </div>
-
-        <div className="sub-header">
-          <div className="sub-header-col border-right">SALDO SIMPANAN</div>
-          <div className="sub-header-col">SALDO PINJAMAN</div>
-        </div>
-
-        <div className="content-body">
-          <div className="col-padding border-right">
-            <div className="data-row"><div className="label-left">Simpanan Pokok</div><div className="colon">:</div><div className="value-group"><span className="rp-symbol">Rp</span><ControlledCurrencyInput value={simpanan.pokok} onChange={(v:number) => handleSimpanan('pokok', v)} className="editable-input align-right" /></div></div>
-            <div className="data-row"><div className="label-left">Simpanan Wajib</div><div className="colon">:</div><div className="value-group"><span className="rp-symbol">Rp</span><ControlledCurrencyInput value={simpanan.wajib} onChange={(v:number) => handleSimpanan('wajib', v)} className="editable-input align-right" /></div></div>
-            <div className="data-row"><div className="label-left">Simpanan Sukarela</div><div className="colon">:</div><div className="value-group"><span className="rp-symbol">Rp</span><ControlledCurrencyInput value={simpanan.sukarela} onChange={(v:number) => handleSimpanan('sukarela', v)} className="editable-input align-right" /></div></div>
-          </div>
-
-          <div className="col-padding">
-            <div className="data-row"><div className="label-right">Pinjaman</div><div className="colon">:</div><div className="value-group"><span className="rp-symbol">Rp</span><ControlledCurrencyInput value={pinjaman} onChange={setPinjaman} className="editable-input align-right fw-bold text-blue-600" /></div></div>
-            <div className="data-row"><div className="label-right">Angsuran ke 1</div><div className="colon">:</div><div className="value-group"><span className="rp-symbol">Rp</span><ControlledCurrencyInput value={angsuran.a1} onChange={(v:number) => handleAngsuran('a1', v)} className="editable-input align-right" /></div></div>
-            <div className="data-row"><div className="label-right">Angsuran ke 2</div><div className="colon">:</div><div className="value-group"><span className="rp-symbol">Rp</span><ControlledCurrencyInput value={angsuran.a2} onChange={(v:number) => handleAngsuran('a2', v)} className="editable-input align-right" /></div></div>
-            <div className="data-row"><div className="label-right">Angsuran ke 3</div><div className="colon">:</div><div className="value-group"><span className="rp-symbol">Rp</span><ControlledCurrencyInput value={angsuran.a3} onChange={(v:number) => handleAngsuran('a3', v)} className="editable-input align-right" /></div></div>
-            <div className="data-row"><div className="label-right">Angsuran ke 4</div><div className="colon">:</div><div className="value-group"><span className="rp-symbol">Rp</span><ControlledCurrencyInput value={angsuran.a4} onChange={(v:number) => handleAngsuran('a4', v)} className="editable-input align-right" /></div></div>
-            <div className="data-row"><div className="label-right">Angsuran ke 5</div><div className="colon">:</div><div className="value-group"><span className="rp-symbol">Rp</span><ControlledCurrencyInput value={angsuran.a5} onChange={(v:number) => handleAngsuran('a5', v)} className="editable-input align-right" /></div></div>
-            <div className="data-row"><div className="label-right">Angsuran ke 6</div><div className="colon">:</div><div className="value-group"><span className="rp-symbol">Rp</span><ControlledCurrencyInput value={angsuran.a6} onChange={(v:number) => handleAngsuran('a6', v)} className="editable-input align-right" /></div></div>
-            <div className="spacer-row"></div>
-            <div className="data-row"><div className="label-right">Jumlah Angsuran</div><div className="colon">:</div><div className="value-group"><span className="rp-symbol">Rp</span><ControlledCurrencyInput value={totalAngsuran} readOnly={true} className="editable-input align-right text-red-600" /></div></div>
-          </div>
-        </div>
-
-        <div className="footer-total">
-          <div className="footer-col border-right">
-            <div className="label-left">Jumlah Simpanan</div>
-            <div className="value-group"><span className="rp-symbol text-emerald-700">Rp</span><ControlledCurrencyInput value={totalSimpanan} readOnly={true} className="editable-input align-right fw-bold text-emerald-700" /></div>
-          </div>
-          <div className="footer-col">
-            <div className="label-right">Sisa Pinjaman</div>
-            <div className="value-group"><span className="rp-symbol text-blue-700">Rp</span><ControlledCurrencyInput value={sisaPinjaman} readOnly={true} className="editable-input align-right fw-bold text-blue-700" /></div>
-          </div>
-        </div>
-
-        <div className="ttd-section">
-          <div className="ttd-box">
-            <span>TTD</span>
-            <div className="ttd-space"></div>
-            <TextInput defaultValue="Septi Listiarini ( KOKAS )" className="editable-input mw-200" style={{ fontWeight: 'bold' }} />
-          </div>
-        </div>
-      </div>
-
-      {isAdmin && (
-        <label htmlFor="kokas-editToggle" className="kokas-edit-button">
-          <svg className="kokas-edit-svgIcon" viewBox="0 0 512 512">
-            <path d="M410.3 231l11.3-11.3-33.9-33.9-62.1-62.1L291.7 89.8l-11.3 11.3-22.6 22.6L58.6 322.9c-10.4 10.4-18 23.3-22.2 37.4L1 480.7c-2.5 8.4-.2 17.5 6.1 23.7s15.3 8.5 23.7 6.1l120.3-35.4c14.1-4.2 27-11.8 37.4-22.2L387.7 253.7 410.3 231zM160 399.4l-9.1 22.7c-4 3.1-8.5 5.4-13.3 6.9L59.4 452l23-78.1c1.4-4.9 3.8-9.4 6.9-13.3l22.7-9.1v32c0 8.8 7.2 16 16 16h32zM362.7 18.7L348.3 33.2 325.7 55.8 314.3 67.1l33.9 33.9 62.1 62.1 33.9 33.9 11.3-11.3 22.6-22.6 14.5-14.5c25-25 25-65.5 0-90.5L453.3 18.7c-25-25-65.5-25-90.5 0zm-47.4 168l-144 144c-6.2 6.2-16.4 6.2-22.6 0s-6.2-16.4 0-22.6l144-144c6.2-6.2 16.4-6.2 22.6 0s6.2 16.4 0 22.6z"></path>
-          </svg>
-        </label>
-      )}
-    </div>
-  );
-};
-
-// --- Sub-Komponen FORM CUTI ---
-const LeaveFormDocument = ({ isAdmin, user }: { isAdmin: boolean, user: Employee | null }) => {
-  return (
-    <div className="fc-wrapper">
-      {isAdmin && <input type="checkbox" id="fc-editToggle" style={{ display: 'none' }} />}
-
-      <div className="fc-container">
-        <div className="fc-header">
-          <div className="fc-header-left">FORM CUTI</div>
-          <div className="fc-header-center">
-            <span>No</span> <span className="fc-space-mx">:</span>
-            <TextInput value={user?.id} className="fc-editable-input fc-w-120" />
-          </div>
-          <div className="fc-header-right">
-            <span>Tanggal</span> <span className="fc-space-mx">:</span>
-            <TextInput className="fc-editable-input fc-w-100" />
-          </div>
-        </div>
-
-        <div className="fc-line"></div>
-
-        <div className="fc-body-container">
-          <div className="fc-item"><div className="fc-label">Nama</div><div className="fc-colon">:</div><div className="fc-val"><TextInput value={user?.name} className="fc-editable-input fc-fw-bold" /></div></div>
-          <div className="fc-item"><div className="fc-label">Lama Bekerja</div><div className="fc-colon">:</div><div className="fc-val"><TextInput value={user?.workDuration} className="fc-editable-input" /></div></div>
-          <div className="fc-item"><div className="fc-label">Hp</div><div className="fc-colon">:</div><div className="fc-val"><TextInput value={user?.phone} className="fc-editable-input" /></div></div>
-          <div className="fc-item"><div className="fc-label">Departemen</div><div className="fc-colon">:</div><div className="fc-val"><TextInput value={user?.field || user?.position} className="fc-editable-input" /></div></div>
-          
-          <div className="fc-item">
-            <div className="fc-label">Alamat</div><div className="fc-colon">:</div>
-            <div className="fc-val"><TextInput value={user?.address} isTextArea={true} className="fc-editable-input fc-textarea" rows={3} /></div>
-          </div>
-          <div className="fc-empty"></div>
-          
-          <div className="fc-item"><div className="fc-label">Hak Cuti</div><div className="fc-colon">:</div><div className="fc-val fc-val-group"><TextInput className="fc-editable-input fc-w-30" /><span>(Hari)</span></div></div>
-          <div className="fc-item"><div className="fc-label">Sisa Cuti</div><div className="fc-colon">:</div><div className="fc-val fc-val-group"><TextInput className="fc-editable-input fc-w-30" /><span>(Hari)</span></div></div>
-          <div className="fc-item"><div className="fc-label">Cuti Yang Diambil</div><div className="fc-colon">:</div><div className="fc-val fc-val-group"><TextInput className="fc-editable-input fc-w-30" /><span>(Hari)</span></div></div>
-          <div className="fc-empty"></div>
-          <div className="fc-item"><div className="fc-label">Tanggal Cuti</div><div className="fc-colon">:</div><div className="fc-val"><TextInput className="fc-editable-input" /></div></div>
-          <div className="fc-empty"></div>
-          <div className="fc-item"><div className="fc-label">Alasan Cuti</div><div className="fc-colon">:</div><div className="fc-val"><TextInput className="fc-editable-input" /></div></div>
-          <div className="fc-empty"></div>
-        </div>
-
-        <div className="fc-line"></div>
-
-        <div className="fc-signatures">
-          <div className="fc-sign-box">
-            <div className="fc-sign-title"><strong>Menyetujui<br />Manager</strong></div>
-            <div className="fc-sign-bottom">(<TextInput className="fc-editable-input fc-sign-input" />)</div>
-          </div>
-          <div className="fc-sign-box">
-            <div className="fc-sign-title"><strong><br />HRD</strong></div>
-            <div className="fc-sign-bottom">(<TextInput defaultValue="SEPTI LISTIARINI" className="fc-editable-input fc-sign-input" style={{ fontWeight: 'bold' }} />)</div>
-          </div>
-          <div className="fc-sign-box">
-            <div className="fc-sign-title"><br /><strong>Karyawan</strong></div>
-            <div className="fc-sign-bottom">(<TextInput value={user?.name} className="fc-editable-input fc-sign-input" />)</div>
-          </div>
-        </div>
-      </div>
-
-      {isAdmin && (
-        <label htmlFor="fc-editToggle" className="fc-edit-button">
-          <svg className="fc-edit-svgIcon" viewBox="0 0 512 512">
-            <path d="M410.3 231l11.3-11.3-33.9-33.9-62.1-62.1L291.7 89.8l-11.3 11.3-22.6 22.6L58.6 322.9c-10.4 10.4-18 23.3-22.2 37.4L1 480.7c-2.5 8.4-.2 17.5 6.1 23.7s15.3 8.5 23.7 6.1l120.3-35.4c14.1-4.2 27-11.8 37.4-22.2L387.7 253.7 410.3 231zM160 399.4l-9.1 22.7c-4 3.1-8.5 5.4-13.3 6.9L59.4 452l23-78.1c1.4-4.9 3.8-9.4 6.9-13.3l22.7-9.1v32c0 8.8 7.2 16 16 16h32zM362.7 18.7L348.3 33.2 325.7 55.8 314.3 67.1l33.9 33.9 62.1 62.1 33.9 33.9 11.3-11.3 22.6-22.6 14.5-14.5c25-25 25-65.5 0-90.5L453.3 18.7c-25-25-65.5-25-90.5 0zm-47.4 168l-144 144c-6.2 6.2-16.4 6.2-22.6 0s-6.2-16.4 0-22.6l144-144c6.2-6.2 16.4-6.2 22.6 0s6.2 16.4 0 22.6z"></path>
-          </svg>
-        </label>
-      )}
-    </div>
-  );
-};
-
-// --- Komponen Utama ---
-interface FinancePageProps {
+interface ControlPanelProps {
   onBack: () => void;
-  user: Employee | null; 
 }
 
-export default function FinancePage({ onBack, user }: FinancePageProps) {
-  const [salaryPeriod, setSalaryPeriod] = useState('Maret 2024');
-  const [kokasPeriod, setKokasPeriod] = useState('Maret 2024');
-  const [cutiPeriod, setCutiPeriod] = useState('Maret 2024');
+export default function ControlPanel({ onBack }: ControlPanelProps) {
+  // State Data Supabase
+  const [employeesData, setEmployeesData] = useState<Employee[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const isAdmin = user?.role === 'ADMIN';
+  // State Modal & UI
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingEmp, setEditingEmp] = useState<Employee | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterBranch, setFilterBranch] = useState('');
+  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  const [showPassword, setShowPassword] = useState(false); 
+  
+  // State Pengaturan Lokasi
+  const [isLocModalOpen, setIsLocModalOpen] = useState(false);
+  const [locBranch, setLocBranch] = useState<string>(BRANCHES[0] || 'Cibubur');
+  const [latInput, setLatInput] = useState('-6.3761176');
+  const [lngInput, setLngInput] = useState('106.897086');
+  const [radiusInput, setRadiusInput] = useState('200');
+  const [mapCenter, setMapCenter] = useState<[number, number]>([-6.3761176, 106.897086]);
 
-  const DocumentCard = ({ title, icon: Icon, colorClass, period, setPeriod, children }: any) => {
-    const contentRef = useRef<HTMLDivElement>(null);
-    const [scale, setScale] = useState(1);
-    const [containerHeight, setContainerHeight] = useState<number | 'auto'>('auto');
+  // Menggunakan type 'any' sementara agar tidak error Typescript
+  const [formData, setFormData] = useState<any>({
+    id: '', name: '', phone: '', address: '', branch: '', grade: '', field: '', position: '', password: '', role: 'EMPLOYEE',
+    anggotaKokas: '', noKokas: '', workDuration: '', bpjsKesehatan: '', bpjsKetenagakerjaan: '',
+    slipNo: '', bankName: 'PERMATA', bankAccount: '' // Tambahan Default State
+  });
 
-    useEffect(() => {
-      const calculateLayout = () => {
-        const width = window.innerWidth;
-        if (width >= 1024) {
-          setScale(1);
-          setContainerHeight('auto');
-        } else {
-          let newScale = 0.4;
-          if (width >= 640) newScale = 0.6;
-          if (width >= 768) newScale = 0.8;
-          setScale(newScale);
-          if (contentRef.current) {
-            setContainerHeight(contentRef.current.scrollHeight * newScale);
-          }
-        }
-      };
+  // 1. Tarik Data Karyawan dari Supabase
+  const fetchEmployees = async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('employees')
+      .select('*')
+      .order('id', { ascending: true }); 
 
-      calculateLayout();
-      window.addEventListener('resize', calculateLayout);
-      const timer = setTimeout(calculateLayout, 100);
-      return () => {
-        window.removeEventListener('resize', calculateLayout);
-        clearTimeout(timer);
-      };
-    }, [children]);
+    if (error) {
+      console.error('Error fetching employees:', error);
+      alert('Gagal mengambil data dari database!');
+    } else {
+      setEmployeesData(data as Employee[]);
+    }
+    setLoading(false);
+  };
 
-    return (
-      <div className="bg-white rounded-3xl p-4 sm:p-6 shadow-sm border border-slate-100">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-          <div className="flex items-center gap-3">
-            <div className={`w-12 h-12 ${colorClass} rounded-2xl flex items-center justify-center`}>
-              <Icon size={24} />
-            </div>
-            <h3 className="font-bold text-lg text-slate-900">{title}</h3>
-          </div>
-          <div className="relative">
-            <select 
-              value={period}
-              onChange={(e) => setPeriod(e.target.value)}
-              className="appearance-none bg-slate-50 border border-slate-200 text-slate-700 text-sm font-bold py-2 pl-4 pr-10 rounded-xl cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/20"
-            >
-              <option>Maret 2024</option>
-              <option>Februari 2024</option>
-              <option>Januari 2024</option>
-            </select>
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-              <ChevronDown size={16} />
-            </div>
-          </div>
-        </div>
+  useEffect(() => {
+    fetchEmployees();
+  }, []);
 
-        <div 
-          className="w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition-all duration-300 ease-out flex justify-center"
-          style={{ height: containerHeight === 'auto' ? 'auto' : `${containerHeight}px` }}
-        >
-          <div 
-            ref={contentRef}
-            className={`origin-top transition-transform duration-300 ease-out bg-white shadow-lg`}
-            style={{ transform: scale === 1 ? 'none' : `scale(${scale})` }}
-          >
-            {children}
-          </div>
-        </div>
-        
-        <div className="mt-4 flex justify-end">
-          <button className="text-primary text-sm font-bold hover:underline flex items-center gap-1">
-            Lihat Detail Penuh <ArrowRight size={16} />
-          </button>
-        </div>
-      </div>
-    );
+  // Filter Search & Branch
+  const filteredEmployees = employeesData.filter(emp => {
+    const query = searchQuery.toLowerCase();
+    const matchesSearch = emp.name.toLowerCase().includes(query) || 
+                          emp.id.toLowerCase().includes(query) ||
+                          emp.branch.toLowerCase().includes(query);
+    const matchesBranch = filterBranch === '' || emp.branch === filterBranch;
+    return matchesSearch && matchesBranch;
+  });
+
+  // Modal Handlers
+  const openAdd = () => {
+    setEditingEmp(null);
+    setFormData({ 
+      id: '', name: '', phone: '', address: '', branch: '', grade: '', field: '', position: '', password: '', role: 'EMPLOYEE',
+      anggotaKokas: '', noKokas: '', workDuration: '', bpjsKesehatan: '', bpjsKetenagakerjaan: '',
+      slipNo: '', bankName: 'PERMATA', bankAccount: '' // Tambahan Default Field
+    });
+    setShowPassword(false);
+    setIsModalOpen(true);
+  };
+
+  const openEdit = (emp: any) => {
+    setEditingEmp(emp);
+    // Memasukkan data existing, jika data tambahan belum ada di DB akan diisi string kosong/default
+    setFormData({
+      ...emp,
+      anggotaKokas: emp.anggotaKokas || '',
+      noKokas: emp.noKokas || '',
+      workDuration: emp.workDuration || '',
+      bpjsKesehatan: emp.bpjsKesehatan || '',
+      bpjsKetenagakerjaan: emp.bpjsKetenagakerjaan || '',
+      slipNo: emp.slipNo || '',
+      bankName: emp.bankName || 'PERMATA',
+      bankAccount: emp.bankAccount || ''
+    });
+    setShowPassword(false);
+    setIsModalOpen(true);
+  };
+
+  // 2. Simpan Data ke Supabase (Insert / Update)
+  const handleSave = async () => {
+    if (!formData.id || !formData.name || !formData.password || !formData.branch) {
+      return alert('ID Login, Nama, Password, dan Cabang wajib diisi!');
+    }
+
+    if (editingEmp) {
+      if (editingEmp.id !== formData.id) {
+        const isDuplicate = employeesData.some(e => e.id === formData.id);
+        if (isDuplicate) return alert('ID Login baru sudah digunakan! Silakan pilih ID lain.');
+      }
+
+      const { error } = await supabase
+        .from('employees')
+        .update(formData)
+        .eq('id', editingEmp.id);
+
+      if (error) {
+        alert('Gagal update karyawan: ' + error.message);
+      } else {
+        alert('✅ Data karyawan berhasil diupdate!');
+        setIsModalOpen(false);
+        fetchEmployees(); 
+      }
+    } else {
+      const isDuplicate = employeesData.some(e => e.id === formData.id);
+      if (isDuplicate) return alert('ID Karyawan sudah terdaftar! Gunakan ID lain.');
+
+      const { error } = await supabase
+        .from('employees')
+        .insert([formData]);
+
+      if (error) {
+        alert('Gagal menambah karyawan: ' + error.message);
+      } else {
+        alert('✅ Karyawan baru berhasil ditambahkan!');
+        setIsModalOpen(false);
+        fetchEmployees(); 
+      }
+    }
+  };
+
+  // 3. Hapus Data dari Supabase
+  const handleDelete = async (id: string) => {
+    if (id === 'admin') return alert('Akun Admin utama tidak boleh dihapus!');
+    
+    if (confirm('Yakin ingin menghapus karyawan ini dari database?')) {
+      const { error } = await supabase
+        .from('employees')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        alert('Gagal menghapus: ' + error.message);
+      } else {
+        fetchEmployees(); 
+      }
+    }
+  };
+
+  // --- LOGIKA LOKASI (GPS) ---
+  useEffect(() => {
+    const savedLat = localStorage.getItem(`enigma_office_lat_${locBranch}`);
+    const savedLng = localStorage.getItem(`enigma_office_lng_${locBranch}`);
+    const savedRad = localStorage.getItem(`enigma_office_radius_${locBranch}`);
+    
+    if (savedLat && savedLng) {
+      setLatInput(savedLat);
+      setLngInput(savedLng);
+      setMapCenter([parseFloat(savedLat), parseFloat(savedLng)]);
+    } else {
+      setLatInput('-6.3761176');
+      setLngInput('106.897086');
+      setMapCenter([-6.3761176, 106.897086]);
+    }
+    setRadiusInput(savedRad || '200');
+  }, [locBranch, isLocModalOpen]);
+
+  const saveLocationSettings = () => {
+    localStorage.setItem(`enigma_office_lat_${locBranch}`, latInput);
+    localStorage.setItem(`enigma_office_lng_${locBranch}`, lngInput);
+    localStorage.setItem(`enigma_office_radius_${locBranch}`, radiusInput);
+    alert(`✅ Pengaturan Lokasi Absen untuk Cabang ${locBranch} Berhasil Disimpan!`);
+    setIsLocModalOpen(false);
+  };
+
+  const getCurrentLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude.toString();
+          const lng = pos.coords.longitude.toString();
+          setLatInput(lat);
+          setLngInput(lng);
+          setMapCenter([pos.coords.latitude, pos.coords.longitude]);
+        },
+        () => alert("Gagal mengambil lokasi GPS. Pastikan izin diberikan.")
+      );
+    }
+  };
+
+  const LocationMarker = () => {
+    useMapEvents({
+      click(e) {
+        setLatInput(e.latlng.lat.toString());
+        setLngInput(e.latlng.lng.toString());
+        setMapCenter([e.latlng.lat, e.latlng.lng]);
+      },
+    });
+    return mapCenter ? (
+      <>
+        <Marker position={mapCenter}></Marker>
+        <Circle center={mapCenter} radius={Number(radiusInput)} pathOptions={{ color: '#e11d48', fillColor: '#f43f5e', fillOpacity: 0.2 }} />
+      </>
+    ) : null;
   };
 
   return (
-    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-5xl mx-auto space-y-8 pb-20">
-      <div className="flex items-center gap-4 mb-2">
-        <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
-          <ArrowLeft size={20} />
-        </button>
-        <h2 className="text-xl font-bold">Laporan Keuangan & Cuti</h2>
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-6xl mx-auto pb-20">
+      
+      {/* HEADER & CONTROLS */}
+      <div className="flex flex-col md:flex-row items-center justify-between mb-8 gap-6">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
+            <ArrowLeft size={20} />
+          </button>
+          <h2 className="text-xl font-bold text-gray-800">Control Panel</h2>
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto">
+          {/* SEARCH BAR ANIMASI */}
+          <div className="relative group w-full sm:w-80 z-20">
+            <div className="absolute w-32 rotate-6 h-10 bg-red-500 rounded-full blur-[12px] -left-2 top-1 opacity-40 group-hover:opacity-70 transition-opacity duration-300"></div>
+            <div className="absolute w-32 rotate-6 h-10 group-hover:w-44 transition-all duration-300 ease-out bg-slate-800 rounded-2xl blur-[12px] -right-2 bottom-1 opacity-40 group-hover:opacity-70"></div>
+            <div className="absolute w-32 h-14 group-hover:h-6 group-hover:blur-[25px] group-hover:w-56 transition-all ease-out duration-300 bg-red-600 rounded-full blur-[20px] -left-5 -top-1 opacity-30"></div>
+            <div className="absolute w-32 h-14 group-hover:h-6 group-hover:blur-[25px] group-hover:w-56 transition-all ease-out duration-300 bg-slate-700 rounded-full blur-[20px] -right-3 -bottom-2 opacity-30"></div>
+
+            <div className="relative w-full h-12 overflow-hidden rounded-2xl bg-white border border-gray-200 shadow-sm z-10 flex items-center">
+              <div className="absolute z-10 -translate-x-44 group-hover:translate-x-[30rem] ease-in transition-all duration-700 h-full w-44 bg-gradient-to-r from-transparent via-red-100 to-transparent opacity-50 -skew-x-12 pointer-events-none"></div>
+
+              <div className="absolute group-focus-within:-left-[5px] group-focus-within:-top-[20px] transition-all duration-300 ease-out w-32 h-32 bg-red-50 blur-[20px] -left-[100px] -top-[100px] z-0 pointer-events-none"></div>
+              <div className="absolute group-focus-within:-right-[5px] group-focus-within:-bottom-[20px] transition-all duration-300 ease-out w-32 h-32 bg-slate-50 blur-[20px] -right-[100px] -bottom-[100px] z-0 pointer-events-none"></div>
+
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2.5" stroke="currentColor" className="size-5 text-gray-400 absolute left-4 top-1/2 -translate-y-1/2 z-[20] pointer-events-none">
+                <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"></path>
+              </svg>
+
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Cari Nama / ID / Cabang..."
+                className="relative w-full h-full outline-none text-sm font-bold text-gray-800 bg-transparent placeholder:font-normal placeholder:text-gray-400 pl-12 pr-16 z-[30]"
+              />
+
+              <div 
+                className="absolute overflow-hidden top-[6px] right-2 bottom-[6px] rounded-xl bg-gray-50 border border-gray-100 p-[2px] z-[40] cursor-pointer group/filter transition-all hover:border-red-200 shadow-sm"
+                onClick={() => setShowFilterDropdown(!showFilterDropdown)}
+              >
+                <div className="absolute group-hover/filter:-left-8 transition-all duration-300 ease-out w-16 h-5 bg-red-200 rounded-full blur-[8px] -left-4 -top-3 pointer-events-none"></div>
+                <div className="absolute group-hover/filter:-left-8 transition-all duration-300 ease-out w-16 h-5 bg-red-200 rounded-full blur-[8px] -left-4 -bottom-3 pointer-events-none"></div>
+                <div className="bg-white relative rounded-lg px-2.5 h-full flex items-center justify-center transition-colors group-hover/filter:text-red-600 text-gray-500">
+                  <svg className="size-4" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 0 1-.659 1.591l-5.432 5.432a2.25 2.25 0 0 0-.659 1.591v2.927a2.25 2.25 0 0 1-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 0 0-.659-1.591L3.659 7.409A2.25 2.25 0 0 1 3 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0 1 12 3Z" strokeLinejoin="round" strokeLinecap="round"></path>
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            <AnimatePresence>
+              {showFilterDropdown && (
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute top-full right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-gray-100 z-[100] max-h-64 overflow-y-auto">
+                  <div className="p-2 space-y-1">
+                    <button onClick={() => { setFilterBranch(''); setShowFilterDropdown(false); }} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-bold transition-colors ${filterBranch === '' ? 'bg-red-50 text-red-600' : 'text-gray-600 hover:bg-gray-50'}`}>Semua Cabang</button>
+                    {BRANCHES.map(b => (
+                      <button key={b} onClick={() => { setFilterBranch(b); setShowFilterDropdown(false); }} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-bold transition-colors ${filterBranch === b ? 'bg-red-50 text-red-600' : 'text-gray-600 hover:bg-gray-50'}`}>{b}</button>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          <div className="flex gap-3 w-full sm:w-auto">
+            <button onClick={() => setIsLocModalOpen(true)} className="bg-white border-2 border-gray-200 text-gray-600 px-4 py-3 rounded-2xl font-bold flex items-center justify-center gap-2 hover:border-red-600 hover:text-red-600 transition-all active:scale-95 shadow-sm">
+              <MapPin size={18} />
+            </button>
+            <button onClick={openAdd} className="flex-1 sm:flex-none bg-red-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-red-600/20 hover:bg-red-700 transition-all active:scale-95">
+              <Plus size={18} /> Tambah
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div className="space-y-8">
-        <DocumentCard title="Slip Gaji" icon={Wallet} colorClass="bg-amber-100 text-amber-600" period={salaryPeriod} setPeriod={setSalaryPeriod}>
-          <SalarySlip isAdmin={isAdmin} user={user} period={salaryPeriod} />
-        </DocumentCard>
-        <DocumentCard title="Saldo Kokas" icon={CreditCard} colorClass="bg-emerald-100 text-emerald-600" period={kokasPeriod} setPeriod={setKokasPeriod}>
-          <KokasBalance isAdmin={isAdmin} user={user} period={kokasPeriod} />
-        </DocumentCard>
-        <DocumentCard title="Form Cuti" icon={Calendar} colorClass="bg-blue-100 text-blue-600" period={cutiPeriod} setPeriod={setCutiPeriod}>
-          <LeaveFormDocument isAdmin={isAdmin} user={user} />
-        </DocumentCard>
+      {/* TABLE DATA */}
+      <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">ID / Nama</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Jabatan / Cabang</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Role</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider text-right">Aksi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {loading ? (
+                <tr><td colSpan={4} className="px-6 py-12 text-center text-gray-400 font-bold">Memuat Data dari Database...</td></tr>
+              ) : filteredEmployees.length > 0 ? filteredEmployees.map(emp => (
+                <tr key={emp.id} className="hover:bg-red-50/30 transition-colors">
+                  <td className="px-6 py-4">
+                    <p className="font-bold text-gray-800">{emp.name}</p>
+                    <p className="text-[11px] font-medium text-gray-400">{emp.id}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <p className="text-sm font-bold text-gray-700">{emp.position === '-' ? 'Belum Diatur' : emp.position}</p>
+                    <p className="text-[10px] font-bold text-red-600 uppercase tracking-wide mt-0.5">{emp.branch}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold tracking-wide ${emp.role === 'ADMIN' ? 'bg-gray-800 text-white' : 'bg-blue-50 text-blue-600'}`}>
+                      {emp.role}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => openEdit(emp)} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all">
+                        <Edit size={16} />
+                      </button>
+                      <button onClick={() => handleDelete(emp.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )) : (
+                <tr><td colSpan={4} className="px-6 py-12 text-center text-gray-400 font-medium">Tidak ada data karyawan yang ditemukan.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      <AnimatePresence>
+        {/* MODAL TAMBAH / EDIT KARYAWAN */}
+        {isModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white rounded-3xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl">
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center sticky top-0 bg-white z-10">
+                <h3 className="text-xl font-bold text-gray-800">{editingEmp ? 'Edit Profil Karyawan' : 'Tambah Karyawan Baru'}</h3>
+                <button onClick={() => setIsModalOpen(false)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"><X size={20} /></button>
+              </div>
+              
+              <div className="p-8 space-y-8">
+                
+                {/* SECTION 1: DATA AKUN & PERSONAL */}
+                <div>
+                  <h4 className="text-xs font-black text-red-600 uppercase tracking-widest border-b border-gray-100 pb-2 mb-4">1. Data Akun & Personal</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">ID Login</label>
+                      <input value={formData.id} onChange={(e) => setFormData({...formData, id: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Contoh: emp001" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Password</label>
+                      <div className="relative">
+                        <input 
+                          type={showPassword ? 'text' : 'password'} 
+                          value={formData.password} 
+                          onChange={(e) => setFormData({...formData, password: e.target.value})} 
+                          className="w-full p-3.5 pr-12 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" 
+                          placeholder="••••••••" 
+                        />
+                        <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700">
+                          {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Nama Lengkap</label>
+                      <input value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">No Telepon</label>
+                      <input value={formData.phone === '-' ? '' : formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="08..." />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Alamat Domisili</label>
+                      <textarea value={formData.address === '-' ? '' : formData.address} onChange={(e) => setFormData({...formData, address: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors h-20" placeholder="Alamat lengkap..." />
+                    </div>
+                  </div>
+                </div>
+
+                {/* SECTION 2: DATA PEKERJAAN */}
+                <div>
+                  <h4 className="text-xs font-black text-red-600 uppercase tracking-widest border-b border-gray-100 pb-2 mb-4">2. Data Pekerjaan</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Cabang Penempatan</label>
+                      <select value={formData.branch} onChange={(e) => setFormData({...formData, branch: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-bold transition-colors">
+                        <option value="">Pilih Cabang</option>
+                        {BRANCHES.map(b => <option key={b} value={b}>{b}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Jabatan</label>
+                      <input value={formData.position === '-' ? '' : formData.position} onChange={(e) => setFormData({...formData, position: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Contoh: Mekanik" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Golongan</label>
+                      <input value={formData.grade === '-' ? '' : formData.grade} onChange={(e) => setFormData({...formData, grade: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Contoh: 3A" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Bidang / Departemen</label>
+                      <input value={formData.field === '-' ? '' : formData.field} onChange={(e) => setFormData({...formData, field: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Contoh: Service" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Lama Bekerja</label>
+                      <input value={formData.workDuration} onChange={(e) => setFormData({...formData, workDuration: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Contoh: 2 Tahun 3 Bulan" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Role Sistem</label>
+                      <select value={formData.role} onChange={(e) => setFormData({...formData, role: e.target.value as Role})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-bold transition-colors">
+                        <option value="EMPLOYEE">Karyawan (EMPLOYEE)</option>
+                        <option value="ADMIN">Administrator (ADMIN)</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* SECTION 3: ADMINISTRASI & BENEFIT (Update ada disini) */}
+                <div>
+                  <h4 className="text-xs font-black text-red-600 uppercase tracking-widest border-b border-gray-100 pb-2 mb-4">3. Administrasi & Benefit</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">No Slip Gaji</label>
+                      <input value={formData.slipNo} onChange={(e) => setFormData({...formData, slipNo: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Contoh: SLP-001" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Nomor Anggota Kokas</label>
+                      <input value={formData.anggotaKokas} onChange={(e) => setFormData({...formData, anggotaKokas: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Masukkan nomor anggota" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">No Kokas</label>
+                      <input value={formData.noKokas} onChange={(e) => setFormData({...formData, noKokas: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Masukkan no kokas" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">No. BPJS Kesehatan</label>
+                      <input value={formData.bpjsKesehatan} onChange={(e) => setFormData({...formData, bpjsKesehatan: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Masukkan nomor BPJS Kes" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">No. BPJS Ketenagakerjaan</label>
+                      <input value={formData.bpjsKetenagakerjaan} onChange={(e) => setFormData({...formData, bpjsKetenagakerjaan: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Masukkan nomor BPJS TK" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Nama Bank</label>
+                      <input value={formData.bankName} onChange={(e) => setFormData({...formData, bankName: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-bold transition-colors" placeholder="Contoh: PERMATA" />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">No. Rekening</label>
+                      <input value={formData.bankAccount} onChange={(e) => setFormData({...formData, bankAccount: e.target.value})} className="w-full p-3.5 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl outline-none focus:border-red-500 font-medium transition-colors" placeholder="Masukkan Nomor Rekening" />
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              <div className="p-6 border-t border-gray-100 flex gap-4 bg-gray-50/50 sticky bottom-0 z-10">
+                <button onClick={() => setIsModalOpen(false)} className="flex-1 py-4 bg-white border border-gray-200 text-gray-600 rounded-xl font-bold hover:bg-gray-50 transition-colors active:scale-95 shadow-sm">Batal</button>
+                <button onClick={handleSave} className="flex-1 py-4 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-lg shadow-red-600/30 transition-all active:scale-95">Simpan Data</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* MODAL PENGATURAN LOKASI (Tetap Dipertahankan) */}
+        {isLocModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl relative flex flex-col max-h-[90vh]">
+              <div className="p-4 flex items-center justify-between border-b border-gray-100">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-emerald-50 text-emerald-600 rounded-full"><MapPin size={20}/></div>
+                  <div>
+                    <h3 className="font-bold text-gray-800">Pengaturan Lokasi</h3>
+                    <p className="text-[10px] text-gray-500">Pusat & Radius per Cabang</p>
+                  </div>
+                </div>
+                <button onClick={() => setIsLocModalOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-5 space-y-5">
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Pilih Cabang</label>
+                  <select value={locBranch} onChange={(e) => setLocBranch(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 text-gray-800 rounded-xl text-sm font-bold outline-none focus:border-red-500">
+                    {BRANCHES.map(b => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+                <div className="h-48 w-full rounded-xl overflow-hidden border border-gray-200 relative z-0">
+                  <MapContainer center={mapCenter} zoom={15} style={{ height: '100%', width: '100%' }}>
+                    <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                    <LocationMarker />
+                  </MapContainer>
+                </div>
+                <button onClick={getCurrentLocation} className="w-full py-3 bg-slate-900 hover:bg-black text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all">
+                  <Navigation size={16} /> AMBIL LOKASI SAAT INI (GPS)
+                </button>
+                <div className="grid grid-cols-2 gap-4">
+                  <div><label className="block text-[10px] font-bold text-gray-500 mb-1">Latitude</label><input type="text" value={latInput} onChange={(e) => setLatInput(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm" /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-500 mb-1">Longitude</label><input type="text" value={lngInput} onChange={(e) => setLngInput(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm" /></div>
+                </div>
+                <div>
+                  <div className="flex justify-between items-end mb-2">
+                    <label className="block text-[10px] font-bold text-gray-500">Radius Toleransi (Meter)</label>
+                    <span className="text-sm font-bold text-blue-600">{radiusInput} Meter</span>
+                  </div>
+                  <input type="range" min="10" max="500" step="10" value={radiusInput} onChange={(e) => setRadiusInput(e.target.value)} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600" />
+                  <div className="flex justify-between text-[10px] text-gray-400 mt-1"><span>10m</span><span>500m</span></div>
+                </div>
+              </div>
+
+              <div className="p-5 bg-white border-t border-gray-100">
+                <button onClick={saveLocationSettings} className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold shadow-lg shadow-red-600/30 flex items-center justify-center gap-2 active:scale-95 transition-all">
+                  SIMPAN PENGATURAN
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
