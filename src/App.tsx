@@ -219,7 +219,7 @@ export default function App() {
             <FinancePage 
               key="finance" 
               onBack={() => setActiveTab('dashboard')} 
-              userRole={currentUser?.role || 'EMPLOYEE'} 
+              user={currentUser} 
             />
           )}
           {activeTab === 'pengajuan' && (
